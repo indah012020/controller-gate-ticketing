@@ -24,8 +24,10 @@
 #include <HardwareSerial.h>
 
 // ================= KONFIGURASI =================
-const char *URL_SCAN    = "http://10.10.1.104:3000/api/v1/scan-qr";  // ?qr-code=<qr>
-const char *URL_CAPTURE = "http://10.10.1.104:3000/api/v1/capture";  // ?qr-code=<qr>
+// Base URL server default
+const char *DEF_BASE_URL = "http://10.10.1.104:3000";
+const char *URL_SCAN    = "/api/v1/scan-qr";  // ?qr-code=<qr>
+const char *URL_CAPTURE = "/api/v1/capture";  // ?qr-code=<qr>
 
 // WiFi default
 const char *DEF_SSID = "GATE1";
@@ -72,12 +74,13 @@ void playTrack(int track) {
 
 // ---------- Setting tersimpan ----------
 Preferences pref;
-String cfgSsid, cfgPass;
+String cfgSsid, cfgPass, cfgBaseUrl;
 
 void loadConfig() {
   pref.begin("gate", false);
   cfgSsid = pref.getString("ssid", DEF_SSID);
   cfgPass = pref.getString("pass", DEF_PASS);
+  cfgBaseUrl = pref.getString("base_url", DEF_BASE_URL);
 }
 
 HardwareSerial &Log = Serial;
@@ -234,9 +237,18 @@ String urlEncode(const String &s) {
   return out;
 }
 
-// HTTP GET <baseUrl>?qr-code=<kode>. Return HTTP code (<= 0 jika gagal), balasan di 'body'.
-int httpGet(const char *baseUrl, const String &kode, String &body) {
-  String url = String(baseUrl) + "?qr-code=" + urlEncode(kode);
+// Helper untuk membersihkan slash berlebih di akhir base URL agar aman dari typo '/'
+String getCleanBaseUrl() {
+  String url = cfgBaseUrl;
+  while (url.endsWith("/")) {
+    url.remove(url.length() - 1);
+  }
+  return url;
+}
+
+// HTTP GET <baseUrl>/api/v1/... <kode>. Return HTTP code (<= 0 jika gagal), balasan di 'body'.
+int httpGet(const String &endpoint, const String &kode, String &body) {
+  String url = getCleanBaseUrl() + endpoint + "?qr-code=" + urlEncode(kode);
   Log.printf("GET %s\n", url.c_str());
 
   WiFiClient client;
@@ -445,6 +457,7 @@ void tampilInfo() {
 
   String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "putus";
   Log.printf("WiFi    : %s (%s)\n", cfgSsid.c_str(), ip.c_str());
+  Log.printf("BaseURL : %s\n", cfgBaseUrl.c_str());
   Log.printf("Scan    : %s\n", URL_SCAN);
   Log.printf("Capture : %s\n", URL_CAPTURE);
   Log.printf("Gate    : %s (lewat %d/%d)\n", buka ? "BUKA" : "TUTUP", l, t);
@@ -472,6 +485,9 @@ void prosesPerintah(String cmd) {
   } else if (perintah == "pass" && nilai.length()) {
     simpan("pass", cfgPass, nilai);
     Log.println("Ketik 'restart' untuk konek ke WiFi baru");
+  } else if (perintah == "url" && nilai.length()) {
+    simpan("base_url", cfgBaseUrl, nilai);
+    Log.println("Base URL berhasil diperbarui");
   } else if (perintah == "scan" && nilai.length()) {
     cekTiket(nilai);
   } else if (perintah == "info") {
@@ -486,7 +502,7 @@ void prosesPerintah(String cmd) {
       Log.printf("INPUT QTY: %d\n", n);
       bukaGate(n, "");
     } else {
-      Log.println("Perintah: 3 | qty 3 | scan <kode> | ssid <nama> | pass <pw> | info | restart");
+      Log.println("Perintah: 3 | qty 3 | scan <kode> | ssid <nama> | pass <pw> | url <http://...> | info | restart");
     }
   }
 }
