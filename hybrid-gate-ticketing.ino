@@ -27,13 +27,13 @@
 const char *URL_SCAN    = "http://10.10.1.104:3000/api/v1/scan-qr";  // ?qr-code=<qr>
 const char *URL_CAPTURE = "http://10.10.1.104:3000/api/v1/capture";  // ?qr-code=<qr>
 
-// WiFi default (bisa diganti lewat Serial, tersimpan di memori ESP)
+// WiFi default
 const char *DEF_SSID = "GATE1";
 const char *DEF_PASS = "1LoveYOU";
 
 // Pin
-const int WG_D0_PIN  = 23;   // QR reader hijau (D0), via resistor 1k
-const int WG_D1_PIN  = 22;   // QR reader putih (D1), via resistor 1k
+const int WG_D0_PIN  = 23;   // QR reader hijau (D0)
+const int WG_D1_PIN  = 22;   // QR reader putih (D1)
 const int RELAY_PIN  = 26;   // relay IN
 const int SENSOR_PIN = 27;   // sensor OUT via dioda (INPUT_PULLUP)
 
@@ -44,16 +44,16 @@ const int MP3_TX_PIN = 17;   // Hubungkan ke RX YX5300
 // Level
 const int RELAY_ON      = HIGH;  
 const int RELAY_OFF     = LOW;
-const int SENSOR_NORMAL = HIGH;  // dioda + INPUT_PULLUP: HIGH = kosong, LOW = terhalang
+const int SENSOR_NORMAL = HIGH;  
 
 // Waktu
-const unsigned long SENSOR_STABIL_MS = 100;   // sinyal sensor harus stabil (anti getar)
-const unsigned long WG_FRAME_MS      = 50;    // frame Wiegand selesai jika tidak ada pulsa
-const unsigned long QR_SAMA_MS       = 3000;  // QR sama dalam waktu ini (setelah proses selesai) diabaikan
+const unsigned long SENSOR_STABIL_MS = 100;   
+const unsigned long WG_FRAME_MS      = 50;    
+const unsigned long QR_SAMA_MS       = 3000;  
 const uint16_t      HTTP_TIMEOUT_MS  = 8000;
-const unsigned long WIFI_RETRY_MS    = 10000; // jeda coba konek ulang WiFi
+const unsigned long WIFI_RETRY_MS    = 10000; 
 
-const bool LOG_SENSOR = true;  // tampilkan "Sensor: TERHALANG/NORMAL"
+const bool LOG_SENSOR = true;  
 // =======================================================
 
 // ---------- YX5300 Audio Player Setup ----------
@@ -80,12 +80,8 @@ void loadConfig() {
   cfgPass = pref.getString("pass", DEF_PASS);
 }
 
-// ---------- Log ke USB Serial ----------
 HardwareSerial &Log = Serial;
 
-// ---------- State gate (dipakai loop & task sensor, dikunci mutex) ----------
-// Antrian tiket: tiap QR valid disimpan dengan sisa orang yang boleh lewat,
-// supaya capture tiap orang memakai QR tiketnya sendiri.
 struct Tiket {
   char kode[48];
   int sisa;
@@ -95,12 +91,31 @@ Tiket antrian[MAX_TIKET];
 int jumAntrian = 0;
 
 SemaphoreHandle_t gateLock;
-QueueHandle_t captureQueue;  // QR yang perlu dikirim ke URL_CAPTURE
+QueueHandle_t captureQueue;  
 int jumTiket = 0;
 int jumLewat = 0;
 bool gateBuka = false;
 
-// kode kosong = input qty manual (tidak dikirim ke capture)
+// Task handle untuk pengulangan audio selamat datang
+TaskHandle_t audioTaskHandle = NULL;
+
+// Task untuk mengulang audio "Selamat Datang" (002) terus menerus selama gate terbuka
+void audioLoopTask(void *pvParameters) {
+  for (;;) {
+    xSemaphoreTake(gateLock, portMAX_DELAY);
+    bool bkan = gateBuka;
+    xSemaphoreGive(gateLock);
+
+    if (bkan) {
+      playTrack(2); // Track 002: Selamat datang
+      // Beri jeda sesuai durasi audio (misal estimasi 3 detik atau sesuaikan dengan panjang audio asli)
+      vTaskDelay(pdMS_TO_TICKS(3000)); 
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(500));
+    }
+  }
+}
+
 void bukaGate(int n, const String &kode) {
   xSemaphoreTake(gateLock, portMAX_DELAY);
   bool penuh = jumAntrian >= MAX_TIKET;
@@ -265,6 +280,7 @@ void prosesTiket(const String &kode) {
   Log.println("QR: " + kode);
   if (WiFi.status() != WL_CONNECTED) {
     Log.println("WiFi putus, tiket tidak bisa dicek. Coba scan lagi sebentar.");
+    playTrack(3); // Audio putus koneksi jika coba scan saat offline
     return;
   }
 
@@ -483,6 +499,14 @@ void setup() {
   Serial.begin(115200);
   Serial.setTimeout(50);
 
+  // Inisialisasi UART2 untuk YX5300 (Baudrate standar umumnya 9600)
+  mp3Serial.begin(9600, SERIAL_8N1, MP3_RX_PIN, MP3_TX_PIN);
+  delay(500);
+  
+  // Atur volume awal (0x00 sampai 0x30 / 0-48). Contoh set volume ke 25:
+  kirimPerintahMp3(0x06, 25);
+  delay(100);
+
   loadConfig();
 
   pinMode(RELAY_PIN, OUTPUT);
@@ -495,8 +519,11 @@ void setup() {
 
   gateLock = xSemaphoreCreateMutex();
   captureQueue = xQueueCreate(32, sizeof(antrian[0].kode));
+
   xTaskCreatePinnedToCore(sensorTask, "sensor", 4096, NULL, 2, NULL, 1);
   xTaskCreatePinnedToCore(captureTask, "capture", 6144, NULL, 1, NULL, 1);
+  // Task FreeRTOS khusus untuk menangani pengulangan audio selamat datang saat gate terbuka
+  xTaskCreatePinnedToCore(audioLoopTask, "audioTask", 2048, NULL, 1, &audioTaskHandle, 1);
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
