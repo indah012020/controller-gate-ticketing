@@ -11,6 +11,7 @@ app.use(express.urlencoded({ extended: true }));
 const validTickets = {
     "TICKET-12345": { jum_tiket: 1 },
     "TICKET-GROUP-3": { jum_tiket: 3 }, // Contoh tiket untuk 3 orang
+    "3858425114": { jum_tiket: 4 }, // Contoh tiket untuk 3 orang
     "TEST": { jum_tiket: 1 }             // Untuk uji coba fungsi tesApi() dari ESP32
 };
 

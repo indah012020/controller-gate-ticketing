@@ -14,7 +14,7 @@
  *     - Track 002: Selamat datang (loop saat gate terbuka)
  *     - Track 003: Putus koneksi (saat WiFi terputus)
  *
- * Log & perintah lewat USB Serial (115200).
+ * Log & perintah lewat USB Serial (115200) & Bluetooth Serial.
  * Library: ArduinoJson
  */
 #include <WiFi.h>
@@ -22,6 +22,13 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <HardwareSerial.h>
+#include <BluetoothSerial.h>
+
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Run `make menuconfig` to and select it
+#endif
+
+BluetoothSerial SerialBT;
 
 // ================= KONFIGURASI =================
 // Base URL server default
@@ -83,7 +90,37 @@ void loadConfig() {
   cfgBaseUrl = pref.getString("base_url", DEF_BASE_URL);
 }
 
-HardwareSerial &Log = Serial;
+// Custom Dual-Output untuk Log (Mengirim output secara bersamaan ke USB Serial & Bluetooth Serial)
+class DualSerial {
+public:
+  template <typename T>
+  size_t print(T arg) {
+    size_t r = Serial.print(arg);
+    if (SerialBT.hasClient()) SerialBT.print(arg);
+    return r;
+  }
+
+  template <typename T>
+  size_t println(T arg) {
+    size_t r = Serial.println(arg);
+    if (SerialBT.hasClient()) SerialBT.println(arg);
+    return r;
+  }
+
+  size_t println(void) {
+    size_t r = Serial.println();
+    if (SerialBT.hasClient()) SerialBT.println();
+    return r;
+  }
+
+  template <typename... Args>
+  void printf(const char *format, Args... args) {
+    Serial.printf(format, args...);
+    if (SerialBT.hasClient()) SerialBT.printf(format, args...);
+  }
+};
+
+DualSerial Log;
 
 struct Tiket {
   char kode[48];
@@ -448,7 +485,7 @@ void sensorTask(void *) {
   }
 }
 
-// ---------- Perintah dari USB Serial ----------
+// ---------- Perintah dari USB Serial & Bluetooth Serial ----------
 void tampilInfo() {
   xSemaphoreTake(gateLock, portMAX_DELAY);
   bool buka = gateBuka;
@@ -508,12 +545,20 @@ void prosesPerintah(String cmd) {
 }
 
 void bacaPerintah() {
-  if (Serial.available()) prosesPerintah(Serial.readStringUntil('\n'));
+  if (Serial.available()) {
+    prosesPerintah(Serial.readStringUntil('\n'));
+  }
+  if (SerialBT.available()) {
+    prosesPerintah(SerialBT.readStringUntil('\n'));
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(50);
+
+  // Inisialisasi Bluetooth Serial dengan nama "GateTicketing"
+  SerialBT.begin("GateTicketing");
 
   // Inisialisasi UART2 untuk YX5300 (Baudrate standar umumnya 9600)
   mp3Serial.begin(9600, SERIAL_8N1, MP3_RX_PIN, MP3_TX_PIN);
